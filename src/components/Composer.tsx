@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Draft } from '../lib/store'
-import { copyImage, downloadImage, imageFiles, MAX_MEDIA, prepareImage, putImage } from '../lib/media'
+import { copyImage, downloadImage, fitMedia, isVideo, mediaFiles, persistStorage, prepareImage, putImage } from '../lib/media'
 import { intentUrl, LIMIT, relativeTime, splitIntoThread, weighted } from '../lib/text'
 import { EmojiPicker } from './EmojiPicker'
 import { IconBack, IconCheck, IconCircleCheck, IconCopy, IconPlus, IconTrash, XLogo } from './Icons'
@@ -32,6 +32,13 @@ export function Composer({ draft, avatar, theme, onUpdate, onDelete, onBack, onA
   const [copiedAll, setCopiedAll] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const lastEmojiClose = useRef(0)
+  const [notice, setNotice] = useState<string | null>(null)
+  const noticeTimer = useRef<number | undefined>(undefined)
+  const flash = useCallback((msg: string) => {
+    setNotice(msg)
+    window.clearTimeout(noticeTimer.current)
+    noticeTimer.current = window.setTimeout(() => setNotice(null), 3500)
+  }, [])
 
   // Reset transient UI when switching drafts
   useEffect(() => {
@@ -133,13 +140,18 @@ export function Composer({ draft, avatar, theme, onUpdate, onDelete, onBack, onA
 
   const addMedia = useCallback(
     async (i: number, files: File[]) => {
-      const room = MAX_MEDIA - (draftRef.current.media[i]?.length ?? 0)
-      const take = files.slice(0, Math.max(0, room))
+      const { take, note } = fitMedia(draftRef.current.media[i] ?? [], files)
+      if (note) flash(note)
       if (!take.length) return
-      const ids = await Promise.all(take.map(async (f) => putImage(await prepareImage(f))))
-      setItems((xs) => xs.map((x, j) => (j === i ? { ...x, media: [...x.media, ...ids].slice(0, MAX_MEDIA) } : x)))
+      persistStorage()
+      try {
+        const ids = await Promise.all(take.map(async (f) => putImage(await prepareImage(f))))
+        setItems((xs) => xs.map((x, j) => (j === i ? { ...x, media: [...x.media, ...ids] } : x)))
+      } catch {
+        flash('Couldn’t save that file, browser storage may be full.')
+      }
     },
-    [setItems],
+    [setItems, flash],
   )
 
   // Image ids are left in IndexedDB; App garbage-collects unreferenced ones on load
@@ -158,12 +170,12 @@ export function Composer({ draft, avatar, theme, onUpdate, onDelete, onBack, onA
 
   const downloadMedia = useCallback((i: number, id: string) => {
     const k = draftRef.current.media[i].indexOf(id)
-    downloadImage(id, `post-${i + 1}-image-${k + 1}`)
+    downloadImage(id, `post-${i + 1}-${isVideo(id) ? 'video' : 'image'}-${k + 1}`)
   }, [])
 
   const onPaste = useCallback(
     (i: number, e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      const files = imageFiles(e.clipboardData.files)
+      const files = mediaFiles(e.clipboardData.files)
       if (!files.length) return
       e.preventDefault()
       addMedia(i, files)
@@ -234,7 +246,9 @@ export function Composer({ draft, avatar, theme, onUpdate, onDelete, onBack, onA
 
   const filled = draft.posts.filter((p) => p.trim())
   const hasContent = filled.length > 0 || draft.media.some((m) => m.length)
-  const imageCount = draft.media.reduce((n, m) => n + m.length, 0)
+  const allMedia = draft.media.flat()
+  const imageCount = allMedia.filter((id) => !isVideo(id)).length
+  const videoCount = allMedia.length - imageCount
   const isThread = draft.posts.length > 1
   const overLimit = draft.posts.some((p) => weighted(p).length > LIMIT)
   const total = draft.posts.reduce((n, p) => n + weighted(p).length, 0)
@@ -334,15 +348,17 @@ export function Composer({ draft, avatar, theme, onUpdate, onDelete, onBack, onA
               </button>
             </div>
           </div>
-          {(isThread || imageCount > 0) && (
+          {notice && <p className="notice">{notice}</p>}
+          {(isThread || allMedia.length > 0) && (
             <p className="hint">
               {isThread && <>X only accepts one post per link: “Start on X” opens post 1, then copy each next post into the thread. {total} chars total. </>}
-              {imageCount > 0 && <>Images can’t travel through the link: hover an image and copy it, then paste it into X.</>}
+              {imageCount > 0 && <>Images can’t travel through the link: hover an image and copy it, then paste it into X. </>}
+              {videoCount > 0 && <>Videos can’t be copied to the clipboard: download them, then drop the file into X.</>}
             </p>
           )}
         </div>
         <p className="shortcuts">
-          <kbd>⌘</kbd><kbd>↵</kbd> new post · paste or drop images · <kbd>⌫</kbd> on empty post removes it · <kbd>N</kbd> new draft · <kbd>/</kbd> search
+          <kbd>⌘</kbd><kbd>↵</kbd> new post · paste or drop images &amp; video · <kbd>⌫</kbd> on empty post removes it · <kbd>N</kbd> new draft · <kbd>/</kbd> search
         </p>
       </div>
 

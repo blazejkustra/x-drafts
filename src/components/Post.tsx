@@ -1,5 +1,5 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { imageFiles, MAX_MEDIA } from '../lib/media'
+import { isVideo, mediaFiles, MAX_MEDIA } from '../lib/media'
 import { MediaGrid } from './MediaGrid'
 import { LIMIT, segments, weighted } from '../lib/text'
 import { IconCheck, IconCopy, IconDown, IconImage, IconSmile, IconSplit, IconUp, IconX, IconSend } from './Icons'
@@ -66,7 +66,7 @@ export const Post = memo(function Post(p: Props) {
   const isLast = p.index === p.total - 1
   const file = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
-  const full = p.media.length >= MAX_MEDIA
+  const full = p.media.length >= MAX_MEDIA || p.media.some(isVideo)
 
   // Auto-grow
   useLayoutEffect(() => {
@@ -100,7 +100,7 @@ export const Post = memo(function Post(p: Props) {
       }}
       onDrop={(e) => {
         setDragging(false)
-        const files = imageFiles(e.dataTransfer.files)
+        const files = mediaFiles(e.dataTransfer.files)
         if (!files.length) return
         e.preventDefault()
         p.onAddMedia(p.index, files)
@@ -148,7 +148,7 @@ export const Post = memo(function Post(p: Props) {
           <div className="tools-left">
             <button
               className="tool"
-              title={full ? `Up to ${MAX_MEDIA} images` : 'Add images'}
+              title={full ? 'Media full: 1 video or 4 images' : 'Add images or a video'}
               disabled={full}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => file.current?.click()}
@@ -158,11 +158,11 @@ export const Post = memo(function Post(p: Props) {
             <input
               ref={file}
               type="file"
-              accept="image/*"
+              accept="image/*,video/*"
               multiple
               hidden
               onChange={(e) => {
-                p.onAddMedia(p.index, imageFiles(e.target.files))
+                p.onAddMedia(p.index, mediaFiles(e.target.files))
                 e.target.value = ''
               }}
             />

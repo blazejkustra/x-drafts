@@ -1,9 +1,32 @@
 import { useEffect, useState } from 'react'
 
-// Images live in IndexedDB (localStorage is ~5MB and strings only). Drafts reference them by id.
+// Images and videos live in IndexedDB (localStorage is ~5MB and strings only). Drafts reference them by id.
+// Video ids are prefixed with "v_" so the kind is known without reading the blob.
 const DB = 'xdrafts-media'
 const STORE = 'images'
 export const MAX_MEDIA = 4
+export const MAX_VIDEO_BYTES = 512 * 1024 * 1024 // X's upload limit
+export const isVideo = (id: string) => id.startsWith('v_')
+export const isVideoFile = (f: File) => f.type.startsWith('video/')
+
+// X rules: either one video, or up to 4 images. Returns which incoming files fit and why others didn't.
+export function fitMedia(existing: string[], files: File[]): { take: File[]; note: string | null } {
+  if (existing.some(isVideo)) return { take: [], note: 'A post with a video can’t have more media.' }
+  const videos = files.filter(isVideoFile)
+  const images = files.filter((f) => !isVideoFile(f))
+  if (videos.length) {
+    const v = videos[0]
+    if (existing.length || images.length) return { take: [], note: 'X allows one video or up to 4 images per post, not both.' }
+    if (v.size > MAX_VIDEO_BYTES) return { take: [], note: 'That video is over X’s 512MB limit.' }
+    return { take: [v], note: videos.length > 1 ? 'Only one video per post, kept the first.' : null }
+  }
+  const room = MAX_MEDIA - existing.length
+  const take = images.slice(0, Math.max(0, room))
+  return { take, note: take.length < images.length ? `Up to ${MAX_MEDIA} images per post.` : null }
+}
+
+// Ask the browser not to evict our storage under pressure (videos are big). Best effort.
+export const persistStorage = () => navigator.storage?.persist?.().catch(() => false)
 
 let dbPromise: Promise<IDBDatabase> | null = null
 function db() {
@@ -31,7 +54,7 @@ const urls = new Map<string, string>()
 // Ids written this session; cleanup skips them so a just-added image is never collected mid-save
 const fresh = new Set<string>()
 
-export async function putImage(blob: Blob, id: string = crypto.randomUUID()) {
+export async function putImage(blob: Blob, id: string = (blob.type.startsWith('video/') ? 'v_' : '') + crypto.randomUUID()) {
   fresh.add(id)
   await tx('readwrite', (s) => s.put(blob, id))
   return id
@@ -75,7 +98,7 @@ export function useImageUrl(id: string) {
 
 // Downscale huge photos so storage stays sane; X recompresses anyway. GIFs are kept as-is (animation).
 export async function prepareImage(file: File, maxSide = 2400): Promise<Blob> {
-  if (file.type === 'image/gif' || file.type === 'image/svg+xml') return file
+  if (!file.type.startsWith('image/') || file.type === 'image/gif' || file.type === 'image/svg+xml') return file
   try {
     const bmp = await createImageBitmap(file)
     const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height))
@@ -115,7 +138,7 @@ export async function downloadImage(id: string, name: string) {
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
   const ext = blob.type.split('/')[1]?.replace('jpeg', 'jpg') ?? 'png'
-  a.download = `${name}.${ext}`
+  a.download = `${name}.${ext.replace('quicktime', 'mov').split(';')[0]}`
   a.click()
   setTimeout(() => URL.revokeObjectURL(a.href), 1000)
 }
@@ -130,12 +153,12 @@ export const blobToDataUrl = (b: Blob) =>
 
 export const dataUrlToBlob = (url: string) => fetch(url).then((r) => r.blob())
 
-export const imageFiles = (list: FileList | DataTransferItemList | null | undefined): File[] => {
+export const mediaFiles = (list: FileList | DataTransferItemList | null | undefined): File[] => {
   if (!list) return []
   const out: File[] = []
   for (const item of Array.from(list as ArrayLike<File | DataTransferItem>)) {
     const f = item instanceof File ? item : item.kind === 'file' ? item.getAsFile() : null
-    if (f && f.type.startsWith('image/')) out.push(f)
+    if (f && (f.type.startsWith('image/') || f.type.startsWith('video/'))) out.push(f)
   }
   return out
 }

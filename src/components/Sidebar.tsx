@@ -18,7 +18,9 @@ type Props = {
 const preview = (d: Draft) => {
   const first = d.posts.find((p) => p.trim()) ?? ''
   if (first.trim()) return first.trim().split('\n')[0]
-  return d.media.some((m) => m.length) ? 'Image post' : 'Empty draft'
+  const all = d.media.flat()
+  if (all.some((id) => id.startsWith('v_'))) return 'Video post'
+  return all.length ? 'Image post' : 'Empty draft'
 }
 
 export const Sidebar = forwardRef<HTMLInputElement, Props>(function Sidebar(p, searchRef) {
@@ -40,7 +42,7 @@ export const Sidebar = forwardRef<HTMLInputElement, Props>(function Sidebar(p, s
       <span className={`item-title ${preview(d) === 'Empty draft' ? 'muted' : ''}`}>{preview(d)}</span>
       <span className="item-meta">
         {d.posts.length > 1 && <span className="badge">{d.posts.length} posts</span>}
-        {d.media.some((m) => m.length) && <span className="badge">{d.media.flat().length} img</span>}
+        {d.media.some((m) => m.length) && <span className="badge">{d.media.flat().some((id) => id.startsWith('v_')) ? 'video' : `${d.media.flat().length} img`}</span>}
         {relativeTime(d.updatedAt)}
       </span>
     </button>
